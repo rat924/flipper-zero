@@ -2,7 +2,7 @@
 
 App(
     appid="muzzleloader",  # Must be unique
-    name="App muzzleloader",  # Displayed in menus
+    name="Muzzleloader",  # Displayed in menus
     apptype=FlipperAppType.EXTERNAL,
     entry_point="muzzleloader_app",
     stack_size=2 * 1024,

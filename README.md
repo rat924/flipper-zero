@@ -1,6 +1,6 @@
 # My flipper-zero apps
 
-Music_Maker           A music player wich plays from a music sheet (load and save is not working yet)
+Music_Maker           A music player wich plays from a music sheet
 
 Muzzle_Loader         A calculator for the maximum powder weight in grains for the muzzleloader
 

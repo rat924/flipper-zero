@@ -3,6 +3,8 @@
 #include <input/input.h>
 #include <furi_hal.h>
 #include <stdlib.h>
+#include <string.h>
+#include <storage/storage.h>
 
 // Enumeration für die Notenwerte und Pausen
 typedef enum {
@@ -23,7 +25,9 @@ typedef enum {
     ModeNotes,
     ModeMenu,
     ModeExit,
-    ModePlay  // Neuer Modus zum Abspielen
+    ModePlay,
+    ModeSave,
+    ModeLoad  // Neuer Modus zum Laden
 } DisplayMode;
 
 // Struktur zur Verwaltung der Noten
@@ -34,7 +38,9 @@ typedef struct {
 } Note;
 
 // Maximale Anzahl der Noten
-#define MAX_NOTES 16
+#define MAX_NOTES 128
+#define MAX_FILENAME_LENGTH 32
+#define MAX_FILES 32
 
 // Struktur zur Verwaltung des Notenblattes
 typedef struct {
@@ -44,14 +50,19 @@ typedef struct {
     int scroll_offset;
     DisplayMode mode;
     int menu_index;
+    char save_name[MAX_FILENAME_LENGTH];  // Dateiname (dynamische Länge)
+    int save_name_length;
+    int save_name_index;
+    char* file_list[MAX_FILES]; // Array der Dateinamen
+    int total_files;
 } NoteSheet;
 
-// Menüoptionen
+// Menu options
 const char* menu_options[] = {
-    "1. Abspielen",
-    "2. Laden",
-    "3. Speichern",
-    "4. Beenden"
+    "1. Play",
+    "2. Load",
+    "3. Save",
+    "4. Exit"
 };
 #define MENU_OPTIONS_COUNT (sizeof(menu_options) / sizeof(menu_options[0]))
 
@@ -90,21 +101,64 @@ void play_sound(float frequency, uint32_t duration_ms) {
     }
 }
 
-// Zeichnen der fünf Linien auf dem Canvas
+// Funktion zum Auflisten der Dateien im Verzeichnis
+void list_files(NoteSheet* sheet) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    File* file = storage_file_alloc(storage);
+    sheet->total_files = 0;
+
+    const char* dir = "/ext/apps_assets/musicmaker";
+
+    if(storage_dir_open(file, dir)) {
+        FileInfo file_info;
+        char file_name[MAX_FILENAME_LENGTH];
+
+        while(storage_dir_read(file, &file_info, file_name, sizeof(file_name))) {
+            if(file_info.size > 0) {
+                sheet->file_list[sheet->total_files] = strdup(file_name);
+                sheet->total_files++;
+            }
+        }
+
+        storage_dir_close(file);
+    }
+
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+// Drawing the five lines on the canvas
 void draw_music_lines(Canvas* canvas, void* ctx) {
     NoteSheet* sheet = (NoteSheet*)ctx;
 
     canvas_clear(canvas);
 
-    // Überprüfen, ob das Menü angezeigt werden soll
+    // Check if the menu, save mode, or load mode should be displayed
     if(sheet->mode == ModeMenu) {
-        // Zeichnen des Menüs
+        // Draw the menu
         for(int i = 0; i < (int)MENU_OPTIONS_COUNT; i++) {
             if(i == sheet->menu_index) {
-                // Markiere die aktuelle Auswahl
+                // Highlight the current selection
                 canvas_draw_str(canvas, 10, 10 + i * 10, ">");
             }
             canvas_draw_str(canvas, 20, 10 + i * 10, menu_options[i]);
+        }
+    } else if(sheet->mode == ModeSave) {
+        // Draw the save mode
+        canvas_draw_str(canvas, 10, 10, "Save as:");
+        canvas_draw_str(canvas, 10, 20, sheet->save_name);
+        // Highlight the current character
+        int mark_x = 10 + sheet->save_name_index * 6;
+        canvas_draw_box(canvas, mark_x, 30, 6, 1);
+    } else if(sheet->mode == ModeLoad) {
+        // Draw the load menu
+        canvas_draw_str(canvas, 10, 10, "Files:");
+        for(int i = 0; i < sheet->total_files; i++) {
+            if(i == sheet->menu_index) {
+                // Highlight the current selection
+                canvas_draw_str(canvas, 10, 20 + i * 10, ">");
+            }
+            canvas_draw_str(canvas, 20, 20 + i * 10, sheet->file_list[i]);
         }
     } else {
         // Zentrierte Position und kleinerer Abstand zwischen den Linien
@@ -130,25 +184,44 @@ void draw_music_lines(Canvas* canvas, void* ctx) {
                     case NoteHalf:
                         // Halbe Note: Unausgefüllter Kreis mit Notenstrich
                         canvas_draw_circle(canvas, x_position, note->y_position, 3);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
+                        if (note->y_position <= 25) { // Noten B (H) und höher, Strich nach unten
+                            canvas_draw_line(canvas, x_position - 3, note->y_position, x_position - 3, note->y_position + 10);
+                        } else {
+                            canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
+                        }
                         break;
                     case NoteQuarter:
                         // Viertelnote: Ausgemalter Kreis mit Notenstrich
                         canvas_draw_box(canvas, x_position - 3, note->y_position - 3, 6, 6);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
+                        if (note->y_position <= 25) { // Noten B (H) und höher, Strich nach unten
+                            canvas_draw_line(canvas, x_position - 3, note->y_position, x_position - 3, note->y_position + 10);
+                        } else {
+                            canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
+                        }
                         break;
                     case NoteEighth:
                         // Achtelnote: Ausgemalter Kreis mit Notenstrich und Häckchen
                         canvas_draw_box(canvas, x_position - 3, note->y_position - 3, 6, 6);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position - 10, x_position + 6, note->y_position - 13);
+                        if (note->y_position <= 25) { // Noten B (H) und höher, Strich und Häckchen nach unten
+                            canvas_draw_line(canvas, x_position - 3, note->y_position, x_position - 3, note->y_position + 10);
+                            canvas_draw_line(canvas, x_position - 3, note->y_position + 10, x_position - 6, note->y_position + 13);
+                        } else {
+                            canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
+                            canvas_draw_line(canvas, x_position + 3, note->y_position - 10, x_position + 6, note->y_position - 13);
+                        }
                         break;
                     case NoteSixteenth:
                         // Sechzehntelnote: Ausgemalter Kreis mit Notenstrich und zwei Häckchen
                         canvas_draw_box(canvas, x_position - 3, note->y_position - 3, 6, 6);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position - 10, x_position + 6, note->y_position - 13);
-                        canvas_draw_line(canvas, x_position + 3, note->y_position - 7, x_position + 6, note->y_position - 10);
+                        if (note->y_position <= 25) { // Noten B (H) und höher, Strich und Häckchen nach unten
+                            canvas_draw_line(canvas, x_position - 3, note->y_position, x_position - 3, note->y_position + 10);
+                            canvas_draw_line(canvas, x_position - 3, note->y_position + 10, x_position - 6, note->y_position + 13);
+                            canvas_draw_line(canvas, x_position - 3, note->y_position + 7, x_position - 6, note->y_position + 10);
+                        } else {
+                            canvas_draw_line(canvas, x_position + 3, note->y_position, x_position + 3, note->y_position - 10);
+                            canvas_draw_line(canvas, x_position + 3, note->y_position - 10, x_position + 6, note->y_position - 13);
+                            canvas_draw_line(canvas, x_position + 3, note->y_position - 7, x_position + 6, note->y_position - 10);
+                        }
                         break;
                     case RestWhole:
                         // Ganze Pause: Rechteck unter der dritten Linie
@@ -179,15 +252,20 @@ void draw_music_lines(Canvas* canvas, void* ctx) {
             }
         }
 
-        // Zeichnen der Notennummer unten
-        char note_number[20]; // Puffergröße erhöht
+        // Zeichnen des Punkts für die aktuelle Note
+        int current_x_position = sheet->notes[sheet->current_note_index].x_position - sheet->scroll_offset;
+        if(current_x_position >= 0 && current_x_position < 128) {
+            canvas_draw_circle(canvas, current_x_position, 58, 2); // Punkt ganz unten auf dem Bildschirm (z.B. bei Y=58)
+        }
+
+        // Draw the note number at the bottom
+        char note_number[20]; // Increased buffer size
         snprintf(note_number, sizeof(note_number), "Note: %d", sheet->current_note_index + 1);
         canvas_draw_str(canvas, 0, 64, note_number);
     }
 
     canvas_commit(canvas);
 }
-
 // Funktion zum Abspielen der Noten
 void play_notes(NoteSheet* sheet) {
     for(int i = 0; i < sheet->total_notes; i++) {
@@ -222,6 +300,64 @@ void play_notes(NoteSheet* sheet) {
         furi_delay_ms(duration); // Warte für die Dauer der Note
     }
 }
+// Funktion zum Speichern der Noten in eine Datei
+void save_notes(NoteSheet* sheet) {
+    const char* dir = "/ext/apps_assets/musicmaker";
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    if(storage) {
+        char path[128];
+        snprintf(path, sizeof(path), "%s/%s.txt", dir, sheet->save_name);
+
+        File* file = storage_file_alloc(storage);
+        if(storage_file_open(file, path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+            for(int i = 0; i < sheet->total_notes; i++) {
+                Note* note = &sheet->notes[i];
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%ld,%ld,%d;", note->x_position, note->y_position, note->value);
+                storage_file_write(file, buffer, strlen(buffer));
+            }
+            storage_file_close(file);
+        }
+        storage_file_free(file);
+        furi_record_close(RECORD_STORAGE);
+    }
+}
+
+// Funktion zum Laden der Noten aus einer Datei
+void load_notes(NoteSheet* sheet) {
+    const char* dir = "/ext/apps_assets/musicmaker";
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    if(storage) {
+        char path[128];
+        snprintf(path, sizeof(path), "%s/%s", dir, sheet->file_list[sheet->menu_index]);
+
+        File* file = storage_file_alloc(storage);
+        if(storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
+            sheet->total_notes = 0;
+            char buffer[4096]; // Großer Puffer für die gesamte Datei
+            int read = storage_file_read(file, buffer, sizeof(buffer) - 1);
+            if(read > 0) {
+                buffer[read] = '\0';
+                char* token = strtok(buffer, ";");
+                while(token != NULL && sheet->total_notes < MAX_NOTES) {
+                    int x_position, y_position, value;
+                    if(sscanf(token, "%d,%d,%d", &x_position, &y_position, &value) == 3) {
+                        Note* note = &sheet->notes[sheet->total_notes];
+                        note->x_position = x_position;
+                        note->y_position = y_position;
+                        note->value = (NoteValue)value;
+                        sheet->total_notes++;
+                    }
+                    token = strtok(NULL, ";");
+                }
+            }
+            sheet->current_note_index = 0; // Setze den aktuellen Notenindex auf die erste Note
+            storage_file_close(file);
+        }
+        storage_file_free(file);
+        furi_record_close(RECORD_STORAGE);
+    }
+}
 
 // Eingabeverarbeitung für die Pfeiltasten und die OK-Taste
 void input_callback(InputEvent* input_event, void* ctx) {
@@ -248,10 +384,16 @@ void input_callback(InputEvent* input_event, void* ctx) {
                             sheet->mode = ModeNotes; // Zurück zum Notenmodus nach dem Abspielen
                             break;
                         case 1: // Laden
-                            // Implementiere Laden-Funktionalität
+                            sheet->mode = ModeLoad;
+                            sheet->menu_index = 0;
+                            list_files(sheet); // Dateien auflisten
                             break;
                         case 2: // Speichern
-                            // Implementiere Speichern-Funktionalität
+                            sheet->mode = ModeSave;
+                            sheet->save_name_index = 0;
+                            sheet->save_name_length = 1;
+                            sheet->save_name[0] = 'A';
+                            sheet->save_name[1] = '\0';
                             break;
                         case 3: // Beenden
                             sheet->mode = ModeExit; // Setze den Modus auf Beenden
@@ -260,6 +402,60 @@ void input_callback(InputEvent* input_event, void* ctx) {
                     break;
                 case InputKeyBack:
                     sheet->mode = ModeNotes; // Zurück zum Notenmodus
+                    break;
+                default:
+                    break;
+            }
+        } else if(sheet->mode == ModeSave) {
+            // Eingaben für den Speichermodus verarbeiten
+            switch(input_event->key) {
+                case InputKeyUp:
+                    if(sheet->save_name[sheet->save_name_index] == 'A') {
+                        sheet->save_name[sheet->save_name_index] = 'Z';
+                    } else {
+                        sheet->save_name[sheet->save_name_index]--;
+                    }
+                    break;
+                case InputKeyDown:
+                    if(sheet->save_name[sheet->save_name_index] == 'Z') {
+                        sheet->save_name[sheet->save_name_index] = 'A';
+                    } else {
+                        sheet->save_name[sheet->save_name_index]++;
+                    }
+                    break;
+                case InputKeyOk:
+                    save_notes(sheet); // Speichern der Noten
+                    sheet->mode = ModeNotes; // Zurück zum Notenmodus
+                    break;
+                case InputKeyRight:
+                    if(sheet->save_name_length < MAX_FILENAME_LENGTH - 1) {
+                        sheet->save_name_index++;
+                        sheet->save_name[sheet->save_name_index] = 'A';
+                        sheet->save_name_length++;
+                        sheet->save_name[sheet->save_name_length] = '\0';
+                    }
+                    break;
+                case InputKeyBack:
+                    sheet->mode = ModeMenu; // Zurück zum Menümodus
+                    break;
+                default:
+                    break;
+            }
+        } else if(sheet->mode == ModeLoad) {
+            // Eingaben für den Lademodus verarbeiten
+            switch(input_event->key) {
+                case InputKeyUp:
+                    sheet->menu_index = (sheet->menu_index - 1 + sheet->total_files) % sheet->total_files;
+                    break;
+                case InputKeyDown:
+                    sheet->menu_index = (sheet->menu_index + 1) % sheet->total_files;
+                    break;
+                case InputKeyOk:
+                    load_notes(sheet); // Laden der Noten
+                    sheet->mode = ModeNotes; // Zurück zum Notenmodus
+                    break;
+                case InputKeyBack:
+                    sheet->mode = ModeMenu; // Zurück zum Menümodus
                     break;
                 default:
                     break;
@@ -341,7 +537,7 @@ void input_callback(InputEvent* input_event, void* ctx) {
 int32_t musicmaker_app(void) {
     // Initialisieren des ViewPorts
     ViewPort* view_port = view_port_alloc();
-    NoteSheet sheet = { .current_note_index = 0, .total_notes = 1, .scroll_offset = 0, .mode = ModeNotes, .menu_index = 0 }; // Start mit einer Note
+    NoteSheet sheet = { .current_note_index = 0, .total_notes = 1, .scroll_offset = 0, .mode = ModeNotes, .menu_index = 0, .total_files = 0 }; // Start mit einer Note
 
     // Initialisieren der Startnote
     sheet.notes[0].x_position = 10; // Startposition weiter links
@@ -364,6 +560,11 @@ int32_t musicmaker_app(void) {
     gui_remove_view_port(gui, view_port);
     view_port_free(view_port);
     furi_record_close("gui");
+
+    // Speicher freigeben
+    for(int i = 0; i < sheet.total_files; i++) {
+        free(sheet.file_list[i]);
+    }
 
     return 0;
 }

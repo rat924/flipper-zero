@@ -26,8 +26,8 @@ typedef struct {
 
 // Maximale Anzahl der Noten
 #define MAX_NOTES 128
-#define MAX_FILENAME_LENGTH 32
-#define MAX_FILES 32
+#define MAX_FILENAME_LENGTH 10
+#define MAX_FILES 30
 
 // Struktur zur Verwaltung des Notenblattes
 typedef struct {
